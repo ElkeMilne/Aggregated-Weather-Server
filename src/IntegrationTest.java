@@ -137,4 +137,5 @@ public class IntegrationTest {
     int finalTime = aggregationServer.getLamportClockTime();
     assertTrue(finalTime > intermediateTime);
   }
+  
 }
