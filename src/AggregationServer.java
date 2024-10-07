@@ -16,38 +16,41 @@ import com.google.gson.reflect.TypeToken;
 
 public class AggregationServer {
     private NetworkHandler networkHandler;
-    private static final Gson gson = new Gson();
-    private LinkedBlockingQueue<Socket> clientRequestQueue = new LinkedBlockingQueue<>();
-    private Map<String, PriorityQueue<WeatherData>> weatherDataMap = new ConcurrentHashMap<>();
-    private Map<String, Long> timeMap = new ConcurrentHashMap<>();
-    private volatile boolean isServerDown = false;
-    private LamportClock lamportClock = new LamportClock();
-    private Thread clientAcceptThread;
-    private ScheduledExecutorService dataSaveScheduler;
-    private ScheduledExecutorService oldDataCleanupScheduler;
-    private static final int DEFAULT_PORT = 4567;
+    private static final Gson gson = new Gson(); // json library to convert data
+    private LinkedBlockingQueue<Socket> clientRequestQueue = new LinkedBlockingQueue<>(); // queue to hold client requests
+    private Map<String, PriorityQueue<WeatherData>> weatherDataMap = new ConcurrentHashMap<>(); // store weather data
+    private Map<String, Long> timeMap = new ConcurrentHashMap<>(); // track timestamps
+    private volatile boolean isServerDown = false; // flag to stop the server
+    private LamportClock lamportClock = new LamportClock(); // clock for synchronization
+    private Thread clientAcceptThread; // thread to accept new client connections
+    private ScheduledExecutorService dataSaveScheduler; // periodic task to save data
+    private ScheduledExecutorService oldDataCleanupScheduler; // periodic task to clean old data
+    private static final int DEFAULT_PORT = 4567; // default port number for the server
 
     public AggregationServer(boolean isTestMode) {
-        this.networkHandler = new SocketNetworkHandler(isTestMode);
+        this.networkHandler = new SocketNetworkHandler(isTestMode); // init the network handler
     }
 
     public void start(int portNumber) {
         System.out.println("server start");
-        networkHandler.initialiseServer(portNumber);
+        networkHandler.initialiseServer(portNumber); // start the server at the specified port
 
+        // schedule periodic task to save data every 60 seconds
         dataSaveScheduler = Executors.newScheduledThreadPool(1);
         dataSaveScheduler.scheduleAtFixedRate(this::saveDataToFile, 0, 60, TimeUnit.SECONDS);
 
-        loadDataFromFile();
+        loadDataFromFile(); // load any existing data
 
+        // schedule periodic task to clean up old entries every 31 seconds
         oldDataCleanupScheduler = Executors.newScheduledThreadPool(1);
-        oldDataCleanupScheduler.scheduleAtFixedRate(this::cleanupOldEntries, 0, 21, TimeUnit.SECONDS);
+        oldDataCleanupScheduler.scheduleAtFixedRate(this::cleanupOldEntries, 0, 31, TimeUnit.SECONDS);
 
-        initialiseClientAcceptThread();
-        processClientRequests();
+        initialiseClientAcceptThread(); // start accepting client connections
+        processClientRequests(); // process incoming client requests
     }
 
     public JsonObject getWeatherData(String stationID) {
+        // return the latest weather data for a station, or null if none available
         return Optional.ofNullable(weatherDataMap.get(stationID))
                 .filter(queue -> !queue.isEmpty())
                 .map(PriorityQueue::peek)
@@ -56,55 +59,57 @@ public class AggregationServer {
     }
 
     public int getLamportClockTime() {
-        return lamportClock.getTime();
+        return lamportClock.getTime(); // return current Lamport clock time
     }
 
     public void loadDataFromFile() {
+        // load weather and time data from files
         Map<String, PriorityQueue<WeatherData>> loadedQueue = readDataFile(
                 "src" + File.separator + "data.json",
                 "src" + File.separator + "initData.json",
-                new TypeToken<ConcurrentHashMap<String, PriorityQueue<WeatherData>>>() {
-                }.getType());
+                new TypeToken<ConcurrentHashMap<String, PriorityQueue<WeatherData>>>() {}.getType());
 
         Map<String, Long> loadedTimeService = readDataFile(
                 "src" + File.separator + "timeData.json",
                 "src" + File.separator + "initTimeData.json",
-                new TypeToken<ConcurrentHashMap<String, Long>>() {
-                }.getType());
+                new TypeToken<ConcurrentHashMap<String, Long>>() {}.getType());
 
-        this.weatherDataMap = loadedQueue;
-        this.timeMap = loadedTimeService;
+        this.weatherDataMap = loadedQueue; // update map with loaded data
+        this.timeMap = loadedTimeService;  // update map with loaded timestamps
     }
 
     private void cleanupOldEntries() {
-        long currentTime = System.currentTimeMillis();
+        long currentTime = System.currentTimeMillis(); // get current time
 
+        // find and remove server IDs that are older than 31 seconds
         Set<String> oldServerIDs = findOldServerIDs(currentTime);
         removeOldServerEntries(oldServerIDs);
 
         if (timeMap.isEmpty()) {
-            weatherDataMap.clear();
+            weatherDataMap.clear(); // if no timestamps left, clear weather data
             return;
         }
 
-        cleanUpWeatherData(oldServerIDs);
+        cleanUpWeatherData(oldServerIDs); // clean up the weather data for the old servers
     }
 
     private Set<String> findOldServerIDs(long currentTime) {
+        // find server IDs that haven't sent data in the last 31 seconds
         return timeMap.keySet().stream()
-                .filter(entry -> currentTime - timeMap.get(entry) > 20000)
+                .filter(entry -> currentTime - timeMap.get(entry) > 31000)
                 .collect(Collectors.toSet());
     }
 
     private void removeOldServerEntries(Set<String> oldServerIDs) {
-        oldServerIDs.forEach(timeMap::remove);
+        oldServerIDs.forEach(timeMap::remove); // remove old server entries
     }
 
-    private void cleanUpWeatherData(Set<String> oldServerIDs) {
+    private synchronized void cleanUpWeatherData(Set<String> oldServerIDs) {
+        // clean up old weather data related to the removed server IDs
         weatherDataMap.forEach((stationID, queue) -> {
             queue.removeIf(weatherData -> oldServerIDs.contains(weatherData.getserverID()));
             if (queue.isEmpty()) {
-                weatherDataMap.remove(stationID);
+                weatherDataMap.remove(stationID); // remove station if no data is left
             }
         });
     }
@@ -113,15 +118,16 @@ public class AggregationServer {
         System.out.println("Processing client requests...\n");
 
         try {
-            processRequestsLoop();
+            processRequestsLoop(); // loop to process requests
         } catch (Exception e) {
-            logException(e);
+            logException(e); // log any exception
         } finally {
-            closeServerResources();
+            closeServerResources(); // close resources after stopping
         }
     }
 
     private void processRequestsLoop() throws Exception {
+        // loop to wait for and handle client connections
         while (!isServerDown) {
             Socket clientSocket = waitForClient();
             if (clientSocket != null) {
@@ -132,25 +138,27 @@ public class AggregationServer {
 
     private void handleNewConnection(Socket clientSocket) {
         System.out.println("New connection\n");
-        handleClientSocket(clientSocket);
+        handleClientSocket(clientSocket); // process the new connection
     }
 
     private void logException(Exception e) {
         System.err.println("An error occurred while processing client requests:");
-        e.printStackTrace();
+        e.printStackTrace(); // log the stack trace
     }
 
     private void closeServerResources() {
         System.out.println("Closing server resources...\n");
-        networkHandler.closeResources();
+        networkHandler.closeResources(); // close network resources
     }
 
     private Socket waitForClient() throws InterruptedException {
+        // wait for client requests (timeout after 10ms)
         return isServerDown ? null : clientRequestQueue.poll(10, TimeUnit.MILLISECONDS);
     }
 
     private void handleClientSocket(Socket clientSocket) {
         try {
+            // receive and process the client's request
             String requestData = receiveDataFromClient(clientSocket);
             if (requestData != null) {
                 String responseData = processRequest(requestData);
@@ -159,19 +167,22 @@ public class AggregationServer {
         } catch (IOException e) {
             logError("Error handling client socket: " + e.getMessage(), e);
         } finally {
-            closeSocket(clientSocket);
+            closeSocket(clientSocket); // close the socket when done
         }
     }
 
     private String receiveDataFromClient(Socket clientSocket) throws IOException {
+        // wait for the client to send data
         return networkHandler.waitForDataFromClient(clientSocket);
     }
 
     private void sendResponseToClient(String responseData, Socket clientSocket) throws IOException {
+        // send the server's response back to the client
         networkHandler.sendResponseToClient(responseData, clientSocket);
     }
 
     private void closeSocket(Socket clientSocket) {
+        // close the client socket if it's still open
         if (clientSocket != null && !clientSocket.isClosed()) {
             try {
                 clientSocket.close();
@@ -182,11 +193,13 @@ public class AggregationServer {
     }
 
     private void logError(String message, Exception e) {
+        // log an error message with the stack trace
         System.err.println(message);
         e.printStackTrace();
     }
 
     private <T> T readDataFile(String file, String initialDataFilePath, Type type) {
+        // try to read data from the main file, or fall back to the initial file
         T result = readFile(file, type);
         if (result == null) {
             result = readFile(initialDataFilePath, type);
@@ -196,6 +209,7 @@ public class AggregationServer {
 
     private <T> T readFile(String filePath, Type type) {
         try {
+            // read JSON data from the file
             String jsonData = Files.readString(Paths.get(filePath));
             return gson.fromJson(jsonData, type);
         } catch (IOException e) {
@@ -206,6 +220,7 @@ public class AggregationServer {
     }
 
     public String processRequest(String inputData) {
+        // process the client's request data
         List<String> lineList = parseInputData(inputData);
         String requestMethod = extractRequestMethod(lineList);
 
@@ -215,8 +230,8 @@ public class AggregationServer {
         return handleRequestMethod(requestMethod, headers, bodyContent);
     }
 
-    // Define extractContent method
     private String extractContent(List<String> lineList) {
+        // extract the content part of the request
         int startIndex = lineList.indexOf("") + 1;
         if (startIndex <= 0 || startIndex >= lineList.size()) {
             return "";
@@ -225,14 +240,15 @@ public class AggregationServer {
     }
 
     private List<String> parseInputData(String inputData) {
-        return Arrays.asList(inputData.split("\r\n"));
+        return Arrays.asList(inputData.split("\r\n")); // split the request into lines
     }
 
     private String extractRequestMethod(List<String> lineList) {
-        return lineList.isEmpty() ? "" : lineList.get(0).split(" ")[0].toUpperCase();
+        return lineList.isEmpty() ? "" : lineList.get(0).split(" ")[0].toUpperCase(); // extract the HTTP method
     }
 
     private String handleRequestMethod(String requestMethod, Map<String, String> headers, String bodyContent) {
+        // handle GET or PUT requests
         switch (requestMethod) {
             case "PUT":
                 return processPut(headers, bodyContent);
@@ -243,8 +259,8 @@ public class AggregationServer {
         }
     }
 
-    // Define processGet method
     private String processGet(Map<String, String> headers, String content) {
+        // process a GET request for weather data
         String stationKey = headers.get("StationID");
         if (stationKey == null || stationKey.isEmpty()) {
             return constructResponse("204 No Content", null);
@@ -259,6 +275,7 @@ public class AggregationServer {
     }
 
     private synchronized void saveDataToFile() {
+        // save weather data and timestamps to files
         String dataFilePath = getFilePath("data.json");
         String initDataFilePath = getFilePath("initData.json");
         saveWeatherData(weatherDataMap, dataFilePath, initDataFilePath);
@@ -269,7 +286,7 @@ public class AggregationServer {
     }
 
     private String getFilePath(String fileName) {
-        return "src" + File.separator + fileName;
+        return "src" + File.separator + fileName; // generate the file path
     }
 
     private synchronized void saveWeatherData(
@@ -277,12 +294,14 @@ public class AggregationServer {
             String filePath,
             String tempFilePath) {
 
+        // write the data to a temp file, then move it to the final location
         writeJsonToFile(data, tempFilePath);
         moveTempFile(tempFilePath, filePath);
     }
 
     private void writeJsonToFile(Map<String, PriorityQueue<WeatherData>> data, String filePath) {
         try {
+            // convert the data to JSON and write it to a file
             String jsonData = gson.toJson(data);
             Files.write(Paths.get(filePath), jsonData.getBytes());
         } catch (IOException e) {
@@ -293,6 +312,7 @@ public class AggregationServer {
 
     private void moveTempFile(String tempFilePath, String finalFilePath) {
         try {
+            // move the temp file to the final location atomically
             Files.move(Paths.get(tempFilePath),
                     Paths.get(finalFilePath),
                     StandardCopyOption.REPLACE_EXISTING,
@@ -304,6 +324,7 @@ public class AggregationServer {
     }
 
     private Map<String, String> extractHeaders(List<String> lineList) {
+        // extract headers from the request
         return lineList.stream()
                 .filter(line -> line.contains(": "))
                 .map(line -> line.split(": ", 2))
@@ -314,33 +335,33 @@ public class AggregationServer {
         String serverKey = headers.get("ServerID");
 
         if (!isValidSource(serverKey)) {
-            return constructBadRequestResponse();
+            return constructBadRequestResponse(); // invalid server ID
         }
 
         int lamportTimestamp = extractLamportTime(headers);
 
         if (!processData(content, lamportTimestamp, serverKey)) {
-            return constructBadRequestResponse();
+            return constructBadRequestResponse(); // failed to process the data
         }
 
         return generateResponse(serverKey);
     }
 
     private String constructBadRequestResponse() {
-        return constructResponse("400 Bad Request", null);
+        return constructResponse("400 Bad Request", null); // return a 400 response
     }
 
     private void initialiseClientAcceptThread() {
         System.out.println("Initializing accept thread...\n");
 
         clientAcceptThread = new Thread(this::acceptClientConnections);
-        clientAcceptThread.start();
+        clientAcceptThread.start(); // start the thread to accept clients
     }
 
     private void acceptClientConnections() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                handleIncomingClient();
+                handleIncomingClient(); // wait for new client connections
             } catch (IOException e) {
                 if (Thread.currentThread().isInterrupted()) {
                     break;
@@ -354,16 +375,17 @@ public class AggregationServer {
     }
 
     private void handleIncomingClient() throws IOException, InterruptedException {
-        Socket clientSocket = networkHandler.acceptIncomingClient();
+        Socket clientSocket = networkHandler.acceptIncomingClient(); // accept a new client
 
         if (clientSocket != null) {
-            sendLamportClockToClient(clientSocket);
-            clientRequestQueue.put(clientSocket);
+            sendLamportClockToClient(clientSocket); // send the current clock time to the client
+            clientRequestQueue.put(clientSocket); // add the client to the request queue
             System.out.println("Added connection to request queue\n");
         }
     }
 
     private void sendLamportClockToClient(Socket clientSocket) throws IOException {
+        // send the Lamport clock value to the client
         String clockValue = "LamportClock: " + lamportClock.getTime() + "\r\n";
         PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
         out.println(clockValue);
@@ -376,10 +398,12 @@ public class AggregationServer {
     }
 
     public boolean isValidStation(String stationId) {
+        // check if a station ID is valid
         return stationId != null && !stationId.isEmpty();
     }
 
     private String constructResponse(String status, String json) {
+        // construct an HTTP response with a status and optional JSON content
         StringBuilder responseBuilder = new StringBuilder();
 
         appendStatusLine(responseBuilder, status);
@@ -393,31 +417,35 @@ public class AggregationServer {
     }
 
     private void appendStatusLine(StringBuilder responseBuilder, String status) {
+        // append the status line to the response
         responseBuilder.append("HTTP/1.1 ").append(status).append("\r\n");
     }
 
     private void appendLamportClock(StringBuilder responseBuilder) {
+        // append the current Lamport clock value to the response
         responseBuilder.append("LamportClock: ").append(lamportClock.send()).append("\r\n");
     }
 
     private void appendJsonHeaders(StringBuilder responseBuilder, String json) {
+        // append JSON content headers and the content itself to the response
         responseBuilder.append("Content-Type: application/json\r\n");
         responseBuilder.append("Content-Length: ").append(json.length()).append("\r\n\r\n");
         responseBuilder.append(json);
     }
 
     private int extractLamportTime(Map<String, String> headers) {
+        // extract and update the Lamport clock time from the request headers
         String lamportValue = headers.getOrDefault("LamportClock", "-1");
 
         int lamportTime = parseLamportTime(lamportValue);
         lamportClock.receive(lamportTime);
 
-        return lamportClock.getTime();
+        return lamportClock.getTime(); // return the updated clock time
     }
 
     private int parseLamportTime(String lamportValue) {
         try {
-            return Integer.parseInt(lamportValue);
+            return Integer.parseInt(lamportValue); // parse the clock time
         } catch (NumberFormatException e) {
             System.err.println("Invalid LamportClock value: " + lamportValue);
             return -1;
@@ -425,6 +453,7 @@ public class AggregationServer {
     }
 
     private boolean isQueueEmpty(PriorityQueue<WeatherData> queue) {
+        // check if the weather data queue is empty
         return Optional.ofNullable(queue).map(PriorityQueue::isEmpty).orElse(true);
     }
 
@@ -433,17 +462,20 @@ public class AggregationServer {
             return Optional.empty();
         }
 
+        // find the first weather data entry that matches the Lamport time
         return queue.stream()
                 .filter(data -> data.getTime() <= lamportTime)
                 .findFirst();
     }
 
     private boolean isValidSource(String serverID) {
+        // check if a server ID is valid
         return serverID != null && !serverID.isEmpty();
     }
 
     private boolean processData(String content, int lamportTime, String serverID) {
         try {
+            // parse the weather data and add it to the queue
             JsonObject weatherDataJSON = gson.fromJson(content, JsonObject.class);
             String stationID = extractID(weatherDataJSON);
             WeatherData newWeatherData = new WeatherData(weatherDataJSON, lamportTime, serverID);
@@ -456,6 +488,7 @@ public class AggregationServer {
     }
 
     private String generateResponse(String serverID) {
+        // generate a response based on whether the request is new or delayed
         long currentTimestamp = System.currentTimeMillis();
         Long lastTimestamp = timeMap.get(serverID);
         timeMap.put(serverID, currentTimestamp);
@@ -468,6 +501,7 @@ public class AggregationServer {
     }
 
     private String findStationId(Map<String, String> headers) {
+        // find the station ID from the headers or default to the first station
         String stationId = headers.get("StationID");
         if (stationId != null && !stationId.isEmpty()) {
             return stationId;
@@ -476,22 +510,24 @@ public class AggregationServer {
     }
 
     private boolean isNewOrDelayedRequest(Long lastTimestamp, long currentTimestamp) {
-        return lastTimestamp == null || (currentTimestamp - lastTimestamp) > 20000;
+        // check if the request is new or delayed (over 31 seconds old)
+        return lastTimestamp == null || (currentTimestamp - lastTimestamp) > 31000;
     }
 
     public boolean addWeatherData(JsonObject weatherDataJSON, int lamportTime, String serverID) {
         String id = extractID(weatherDataJSON);
 
         if (!isValidStation(id)) {
-            return false;
+            return false; // invalid station ID
         }
+        // add the new weather data to the queue
         weatherDataMap.computeIfAbsent(id, k -> new PriorityQueue<>())
                 .add(new WeatherData(weatherDataJSON, lamportTime, serverID));
         return true;
     }
 
     public NetworkHandler getNetworkHandler() {
-        return this.networkHandler;
+        return this.networkHandler; // return the network handler
     }
 
     public String extractID(JsonObject weatherDataJSON) {
@@ -499,26 +535,26 @@ public class AggregationServer {
     }
 
     public void terminate() {
-        markShutdown();
+        markShutdown(); // mark the server as shutting down
 
-        haltThread(clientAcceptThread);
-        stopScheduledTask(dataSaveScheduler, 5);
-        stopScheduledTask(oldDataCleanupScheduler, 60);
+        haltThread(clientAcceptThread); // stop the client accept thread
+        stopScheduledTask(dataSaveScheduler, 5); // stop the data save task
+        stopScheduledTask(oldDataCleanupScheduler, 60); // stop the cleanup task
 
         System.out.println("Server termination initiated...");
     }
 
     private void markShutdown() {
-        this.isServerDown = true;
+        this.isServerDown = true; // set the server down flag
     }
 
     public boolean getisServerDown() {
-        return this.isServerDown;
+        return this.isServerDown; // return the server down flag
     }
 
     private void haltThread(Thread t) {
         if (t != null) {
-            t.interrupt();
+            t.interrupt(); // interrupt the thread
         }
     }
 
@@ -527,9 +563,10 @@ public class AggregationServer {
             return;
         }
 
-        scheduler.shutdown();
+        scheduler.shutdown(); // shutdown the scheduled task
 
         try {
+            // wait for the task to finish, then forcefully stop it if necessary
             if (!scheduler.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
@@ -542,11 +579,11 @@ public class AggregationServer {
     public static void main(String[] args) {
         int port;
         if (args.length == 0) {
-            port = DEFAULT_PORT;
+            port = DEFAULT_PORT; // use the default port if none provided
         } else {
-            port = Integer.parseInt(args[0]);
+            port = Integer.parseInt(args[0]); // use the specified port
         }
         AggregationServer server = new AggregationServer(false);
-        server.start(port);
+        server.start(port); // start the server
     }
 }
