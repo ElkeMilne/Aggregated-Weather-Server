@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class AggregationServerTest {
+public class AggregationServerTests {
 
   private AggregationServer aggregationServer;
 
@@ -137,7 +137,7 @@ public class AggregationServerTest {
     assertTrue(response.contains("400 Bad Request"));
   }
 
-  // Test if data is expunged after 30 seconds
+  // Test if data is gone after 30 seconds
   @Test
   public void testDataExpungingAfterThirtySeconds() throws InterruptedException {
     // Add weather data with a valid station ID
@@ -152,13 +152,12 @@ public class AggregationServerTest {
     assertTrue(response.contains("200 OK"));
     assertTrue(response.contains("station1"));
     
-    // Wait for more than 30 seconds (e.g., 31 seconds)
-    Thread.sleep(31000); // 31,000 milliseconds = 31 seconds
+    // bit more than 30
+    Thread.sleep(31000); 
 
-    // Send the same GET request again after the data should have been expunged
     String responseAfterExpunge = aggregationServer.processRequest(getRequest);
     
-    // Verify that the server returns a 204 No Content response, meaning the data was expunged
+    //verify 204
     assertTrue(responseAfterExpunge.contains("204 No Content"));
   }
 }

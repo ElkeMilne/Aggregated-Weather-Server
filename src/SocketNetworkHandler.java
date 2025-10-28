@@ -140,7 +140,7 @@ public class SocketNetworkHandler implements NetworkHandler {
     }
     lock.lock(); // Ensure thread-safe access
     try {
-      this.closeResources(); // Close previous resources before reinitializing
+      this.closeResources(); // Close previous resources before reinitialising
       clientSocket = new Socket(serverName, portNumber);
       out = new PrintWriter(clientSocket.getOutputStream(), true);
       in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
@@ -157,7 +157,7 @@ public class SocketNetworkHandler implements NetworkHandler {
       closeResources();
       return -1;
     } finally {
-      lock.unlock(); // Unlock after initialization is complete
+      lock.unlock(); // Unlock after initialisation is complete
     }
   }
 

@@ -1,26 +1,27 @@
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class LamportClock {
-    private AtomicInteger time = new AtomicInteger(0);
+    private AtomicInteger time = new AtomicInteger(0);  // using atomic integer to keep track of the clock
 
-    // Synchronized method to ensure only one thread can send and increment the clock at a time
+    // synchronized method to increment and return the current time
     public synchronized int send() {
-        return time.incrementAndGet(); // Atomically increments by 1 and returns the new value
+        return time.incrementAndGet();  // increments the time and returns it
     }
 
-    // Get time is atomic, no need for synchronization here
+    // gets the current time without modifying it
     public int getTime() {
-        return time.get(); 
+        return time.get();  // returns the current time
     }
 
-    // Synchronized method to handle incoming timestamps and ensure atomic updates
+    // synchronized method to update the clock when receiving a timestamp
     public synchronized void receive(int receivedTimestamp) {
-        // Atomically update the time to the maximum of the current and received time, plus one
+        // updates the time to be the max of the current time or the received timestamp, and then increments
         time.updateAndGet(currentTime -> Math.max(currentTime, receivedTimestamp) + 1);
     }
 
+    // toString method to represent the clock as a string
     @Override
     public String toString() {
-        return "LamportClock [time=" + time + "]";
+        return "LamportClock [time=" + time + "]";  // returns a string showing the current time
     }
 }

@@ -11,7 +11,7 @@ MAIN_SOURCES = src/GETClient.java \
           src/NetworkHandler.java \
           src/SocketNetworkHandler.java \
 
-TEST_SOURCES = src/AggregationServerTest.java \
+TEST_SOURCES = src/AggregationServerTests.java \
 					src/ContentServerTest.java \
 					src/GETClientTest.java \
 					src/JSONHandlerTest.java \
