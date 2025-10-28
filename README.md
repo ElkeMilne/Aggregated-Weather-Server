@@ -65,5 +65,11 @@ To clean up the compiled classes, you can run:
 
 make clean
 
+6. Run Tests
+
+To run the tests, you can run:
+
+make test
+
 Notes
 Make sure the AggregationServer is running before starting any ContentServer instances. The GETClient can be started at any time but will only retrieve data if the AggregationServer is running and has received data from a ContentServer.
